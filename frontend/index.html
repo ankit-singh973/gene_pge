@@ -995,7 +995,9 @@
                             </button>
                             <div className="hidden sm:flex items-center gap-2">
                                 <span className="text-xs font-bold text-gray-900 tracking-wide">{data.gene_symbol}</span>
-                                <span className="text-[10px] text-gray-400 font-medium">{data.identification.primary_gene}</span>
+                                {data.identification.primary_gene && data.identification.primary_gene !== data.gene_symbol && (
+                                    <span className="text-[10px] text-gray-400 font-medium">{data.identification.primary_gene}</span>
+                                )}
                             </div>
                             <a href={`https://www.uniprot.org/uniprotkb/${data.uniprot_accession}`} target="_blank" rel="noopener" className="text-[10px] text-gray-400 font-semibold hover:text-brand-600 transition-colors">{data.uniprot_accession}</a>
                         </div>
