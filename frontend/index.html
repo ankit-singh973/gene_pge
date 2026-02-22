@@ -1,0 +1,1107 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gene Explorer | Research-Grade Dashboard</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/cytoscape@3/dist/cytoscape.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+    <style>
+        *, *::before, *::after { box-sizing: border-box; }
+        body { font-family: 'Inter', system-ui, -apple-system, sans-serif; scroll-behavior: smooth; -webkit-font-smoothing: antialiased; }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        .sticky-nav { position: sticky; top: 80px; height: fit-content; }
+        .scroll-mt-24 { scroll-margin-top: 5rem; }
+
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes pulse-soft { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+        @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+        .animate-fade-in { animation: fadeIn 0.3s ease-out; }
+        .animate-slide-up { animation: slideUp 0.4s ease-out; }
+        .skeleton { background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: 8px; }
+
+        .variant-marker:hover { filter: brightness(1.15); cursor: pointer; }
+        .cy-tooltip { position: absolute; background: rgba(15, 23, 42, 0.94); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); color: #f8fafc; padding: 10px 14px; border-radius: 10px; font-size: 11px; font-family: 'Inter', sans-serif; pointer-events: none; z-index: 100; max-width: 280px; line-height: 1.55; box-shadow: 0 14px 44px rgba(0,0,0,0.32), 0 0 0 1px rgba(255,255,255,0.06); opacity: 0; transform: translateY(5px) scale(0.97); transition: opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1), transform 0.22s cubic-bezier(0.16, 1, 0.3, 1); will-change: opacity, transform; }
+        .cy-tooltip.visible { opacity: 1; transform: translateY(0) scale(1); }
+        .cy-tooltip::after { content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 5px solid transparent; border-top-color: rgba(15, 23, 42, 0.94); }
+        .graph-canvas { background-color: #fafbfe; background-image: radial-gradient(circle, #e2e8f0 0.65px, transparent 0.65px); background-size: 22px 22px; }
+    </style>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: { 50:'#f0f9ff', 100:'#e0f2fe', 200:'#bae6fd', 300:'#7dd3fc', 400:'#38bdf8', 500:'#0ea5e9', 600:'#0284c7', 700:'#0369a1', 800:'#075985', 900:'#0c4a6e' },
+                        surface: { 50:'#f8fafc', 100:'#f1f5f9', 200:'#e2e8f0', 300:'#cbd5e1' },
+                    },
+                    fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'], mono: ['JetBrains Mono', 'monospace'] },
+                }
+            }
+        }
+    </script>
+</head>
+
+<body class="bg-surface-50 text-gray-900 min-h-screen">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef, useCallback } = React;
+
+        // ═══════════════════════════════════════════════════════════════
+        //  PRIMITIVES
+        // ═══════════════════════════════════════════════════════════════
+
+        const Icon = ({ name, className = "w-5 h-5" }) => {
+            const ref = useRef(null);
+            useEffect(() => {
+                if (ref.current && window.lucide) {
+                    ref.current.innerHTML = '';
+                    const i = document.createElement('i');
+                    i.setAttribute('data-lucide', name);
+                    i.className = className;
+                    ref.current.appendChild(i);
+                    window.lucide.createIcons({ nodes: [ref.current] });
+                }
+            }, [name, className]);
+            return <span ref={ref} className="inline-flex items-center justify-center shrink-0" />;
+        };
+
+        const Badge = ({ children, variant = "default", className = "" }) => {
+            const v = {
+                default: "bg-gray-100 text-gray-600 ring-gray-200",
+                success: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+                info: "bg-sky-50 text-sky-700 ring-sky-200",
+                warning: "bg-amber-50 text-amber-700 ring-amber-200",
+                red: "bg-red-50 text-red-700 ring-red-200",
+                purple: "bg-violet-50 text-violet-700 ring-violet-200",
+            };
+            return <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold ring-1 ring-inset ${v[variant] || v.default} ${className}`}>{children}</span>;
+        };
+
+        const Card = ({ title, subtitle, children, className = "", id, headerRight }) => (
+            <div id={id} className={`bg-white rounded-2xl border border-gray-200/80 shadow-sm scroll-mt-24 animate-fade-in ${className}`}>
+                {title && (
+                    <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+                        <div>
+                            <h3 className="font-semibold text-gray-900 text-[15px]">{title}</h3>
+                            {subtitle && <p className="text-xs text-gray-400 mt-0.5">{subtitle}</p>}
+                        </div>
+                        {headerRight && <div>{headerRight}</div>}
+                    </div>
+                )}
+                <div className="px-6 py-5">{children}</div>
+            </div>
+        );
+
+        const SubSection = ({ title, children }) => (
+            <div className="mb-5 last:mb-0">
+                <h5 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">{title}</h5>
+                <div className="text-sm text-gray-600 leading-relaxed">{children}</div>
+            </div>
+        );
+
+        const SkeletonBlock = ({ rows = 3 }) => (
+            <div className="space-y-3 py-4">
+                {Array.from({ length: rows }).map((_, i) => (
+                    <div key={i} className="skeleton" style={{ height: '14px', width: `${80 - i * 15}%` }} />
+                ))}
+            </div>
+        );
+
+        let toastTimer = null;
+        const useToast = () => {
+            const [msg, setMsg] = useState(null);
+            const show = useCallback((text) => {
+                setMsg(text);
+                if (toastTimer) clearTimeout(toastTimer);
+                toastTimer = setTimeout(() => setMsg(null), 2200);
+            }, []);
+            return [msg, show];
+        };
+
+        const Toast = ({ message }) => {
+            if (!message) return null;
+            return (
+                <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[9999] animate-slide-up">
+                    <div className="bg-gray-900 text-white text-sm font-medium px-5 py-2.5 rounded-xl shadow-2xl flex items-center gap-2">
+                        <Icon name="check-circle" className="w-4 h-4 text-emerald-400" /> {message}
+                    </div>
+                </div>
+            );
+        };
+
+        const ReferenceBlock = ({ references }) => {
+            const [open, setOpen] = useState(false);
+            if (!references || references.length === 0) return null;
+            return (
+                <div className="mt-5 pt-4 border-t border-gray-100">
+                    <button onClick={() => setOpen(!open)} className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1.5 hover:text-gray-600 transition-colors">
+                        <Icon name={open ? "chevron-up" : "chevron-down"} className="w-3 h-3" />
+                        Literature ({references.length})
+                    </button>
+                    {open && (
+                        <ul className="mt-3 space-y-2 animate-fade-in">
+                            {references.map((ref, i) => (
+                                <li key={i} className="text-sm bg-surface-50 p-3 rounded-lg border border-gray-100 flex items-start justify-between gap-3">
+                                    <p className="text-gray-700 font-medium leading-snug flex-1">{ref.title}</p>
+                                    <a href={ref.url} target="_blank" rel="noopener" className="shrink-0 text-[10px] font-bold text-brand-600 hover:underline whitespace-nowrap">PMID:{ref.pubmed_id}</a>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </div>
+            );
+        };
+
+        // ═══════════════════════════════════════════════════════════════
+        //  GENE HEADER
+        // ═══════════════════════════════════════════════════════════════
+
+        const GeneHeader = ({ data }) => (
+            <div className="bg-white border-b border-gray-200 shadow-sm">
+                <div className="max-w-7xl mx-auto px-6 py-10">
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-10 items-start">
+                        <div className="lg:col-span-2">
+                            <div className="flex flex-wrap items-center gap-2 mb-3">
+                                <Badge variant="info">UniProt: {data.uniprot_accession}</Badge>
+                                <Badge variant="success">Swiss-Prot Reviewed</Badge>
+                                <Badge variant="warning">Annotation: {data.annotation_score}/5</Badge>
+                            </div>
+                            <h1 className="text-5xl font-black text-gray-900 tracking-tight">{data.gene_symbol}</h1>
+                            <p className="text-xl text-gray-400 font-medium mt-1">{data.identification.primary_gene || 'N/A'}</p>
+                            <div className="mt-5 flex flex-wrap gap-5 text-sm text-gray-500">
+                                <span className="flex items-center gap-1.5"><Icon name="dna" className="w-4 h-4 text-brand-500" /> {data.organism}</span>
+                                <span className="flex items-center gap-1.5 font-mono text-xs"><Icon name="hash" className="w-4 h-4 text-brand-500" /> {data.identification.length} AA</span>
+                            </div>
+                        </div>
+                        <div className="bg-surface-50 border border-gray-200 p-5 rounded-2xl">
+                            <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-4">Identification</h4>
+                            <div className="space-y-3">
+                                <div>
+                                    <label className="text-[10px] font-bold text-gray-300 uppercase">Gene Synonyms</label>
+                                    <p className="text-sm text-gray-700 font-medium mt-0.5">{data.identification.synonyms.join(', ') || 'None'}</p>
+                                </div>
+                                <div>
+                                    <label className="text-[10px] font-bold text-gray-300 uppercase">Protein Names</label>
+                                    <p className="text-sm text-gray-500 italic leading-snug mt-0.5">{data.identification.alternative_protein_names.slice(0, 3).join('; ') || 'None'}</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+
+        // ═══════════════════════════════════════════════════════════════
+        //  VARIANT VIEWER
+        // ═══════════════════════════════════════════════════════════════
+
+        const VariantViewer = ({ variants, sequenceLength }) => {
+            const [sel, setSel] = useState(null);
+
+            const getColor = (v) => {
+                const s = v.clinical_significance.toLowerCase();
+                if (s.includes('disease') || s.includes('pathogenic')) return '#ef4444';
+                if (s.includes('benign')) return '#3b82f6';
+                return '#94a3b8';
+            };
+
+            const sorted = useMemo(() => [...variants].sort((a, b) => a.position - b.position), [variants]);
+
+            return (
+                <Card id="variants" title="Variant Viewer" subtitle={`${variants.length} mapped variants across ${sequenceLength} residues`}>
+                    <div className="p-4 bg-surface-50 rounded-xl border border-gray-100">
+                        <div className="mb-10 relative h-14 flex items-center">
+                            <div className="absolute w-full h-2.5 bg-gradient-to-r from-gray-200 via-gray-100 to-gray-200 rounded-full" />
+                            <div className="absolute top-11 w-full flex justify-between text-[10px] font-mono text-gray-400">
+                                <span>1</span><span>{Math.round(sequenceLength / 4)}</span><span>{Math.round(sequenceLength / 2)}</span><span>{Math.round(sequenceLength * 3 / 4)}</span><span>{sequenceLength}</span>
+                            </div>
+                            <div className="relative w-full h-full">
+                                {sorted.map((v, i) => (
+                                    <div key={i} className="absolute top-0 bottom-0 flex flex-col items-center justify-center group pointer-events-none" style={{ left: `${(v.position / sequenceLength) * 100}%` }}>
+                                        <div className="w-1.5 h-7 rounded-full cursor-pointer pointer-events-auto transition-all hover:scale-[1.8] variant-marker" style={{ backgroundColor: getColor(v), opacity: sel && sel.position === v.position ? 1 : 0.8 }} onClick={(e) => { e.stopPropagation(); setSel(v); }} />
+                                        <div className="absolute bottom-full mb-2.5 opacity-0 group-hover:opacity-100 bg-gray-900 text-white text-[10px] py-1 px-2.5 rounded-lg whitespace-nowrap z-50 pointer-events-none transition-opacity shadow-lg font-medium">
+                                            {v.from}{v.position}{v.to}{v.disease ? ` \u2022 ${v.disease.slice(0, 25)}` : ''}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                        <div className="flex justify-center gap-6">
+                            <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-red-500" /><span className="text-[10px] font-semibold text-gray-500">Pathogenic</span></div>
+                            <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-blue-500" /><span className="text-[10px] font-semibold text-gray-500">Benign</span></div>
+                            <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-gray-400" /><span className="text-[10px] font-semibold text-gray-500">Uncertain</span></div>
+                        </div>
+                    </div>
+                    {sel && (
+                        <div className="mt-5 p-5 bg-white border border-gray-200 rounded-xl shadow-md animate-fade-in">
+                            <div className="flex justify-between items-start mb-3">
+                                <div>
+                                    <h4 className="text-lg font-bold text-gray-900">{sel.from}{sel.position}{sel.variant_residue || sel.to}</h4>
+                                    <Badge variant={sel.clinical_significance === 'Disease' ? 'red' : 'default'}>{sel.clinical_significance}</Badge>
+                                </div>
+                                <button onClick={() => setSel(null)} className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-400 transition-colors"><Icon name="x" className="w-4 h-4" /></button>
+                            </div>
+                            <p className="text-sm text-gray-600 leading-relaxed">{sel.description || 'No description available.'}</p>
+                            {sel.disease && <p className="text-xs font-semibold text-gray-800 mt-3 bg-red-50 px-3 py-1.5 rounded-lg inline-block">{sel.disease}</p>}
+                            <ReferenceBlock references={sel.references} />
+                        </div>
+                    )}
+                </Card>
+            );
+        };
+
+        // ═══════════════════════════════════════════════════════════════
+        //  REACTOME PATHWAYS
+        // ═══════════════════════════════════════════════════════════════
+
+        const PathwaySection = ({ reactome }) => (
+            <Card id="pathways" title="Reactome Pathways" subtitle={`${reactome.length} annotated pathway${reactome.length !== 1 ? 's' : ''}`}>
+                {reactome && reactome.length > 0 ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {reactome.map((p, i) => (
+                            <a key={i} href={p.url} target="_blank" rel="noopener" className="block bg-surface-50 p-4 rounded-xl border border-gray-100 hover:border-brand-300 hover:shadow-md transition-all group">
+                                <p className="text-xs font-semibold text-gray-800 mb-1 leading-relaxed group-hover:text-brand-700 transition-colors">{p.pathway_name}</p>
+                                <div className="flex items-center justify-between text-[10px] text-gray-400 font-mono">
+                                    <span>{p.pathway_id}</span>
+                                    <Icon name="arrow-up-right" className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity text-brand-500" />
+                                </div>
+                            </a>
+                        ))}
+                    </div>
+                ) : (
+                    <p className="text-xs text-gray-400 italic text-center py-6">No Reactome pathways annotated for this entry.</p>
+                )}
+            </Card>
+        );
+
+        // ═══════════════════════════════════════════════════════════════
+        //  PTM SECTION
+        // ═══════════════════════════════════════════════════════════════
+
+        const PtmSection = ({ ptm }) => {
+            const PREVIEW = 6;
+            const [expanded, setExpanded] = useState(false);
+            const sites = ptm.sites || [];
+            const canCollapse = sites.length > PREVIEW;
+            const visible = expanded || !canCollapse ? sites : sites.slice(0, PREVIEW);
+
+            return (
+                <Card id="ptm" title="Post-Translational Modifications" subtitle={`${sites.length} modification site${sites.length !== 1 ? 's' : ''}`}
+                    headerRight={canCollapse && (
+                        <button onClick={() => setExpanded(!expanded)} className="flex items-center gap-1 text-[11px] font-semibold text-brand-600 hover:text-brand-700 transition-colors">
+                            {expanded ? 'Collapse' : `Show all ${sites.length}`}
+                            <Icon name={expanded ? 'chevron-up' : 'chevron-down'} className="w-3.5 h-3.5" />
+                        </button>
+                    )}>
+                    {ptm.description && <p className="text-sm text-gray-500 mb-5 leading-relaxed">{ptm.description}</p>}
+                    {sites.length > 0 ? (
+                        <div>
+                            <div className="overflow-x-auto rounded-xl border border-gray-100">
+                                <table className="w-full text-left text-sm">
+                                    <thead className="bg-surface-50 text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100">
+                                        <tr><th className="px-4 py-3">Position</th><th className="px-4 py-3">Residue</th><th className="px-4 py-3">Modification</th><th className="px-4 py-3">Evidence</th></tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-50">
+                                        {visible.map((s, i) => (
+                                            <tr key={i} className="hover:bg-surface-50 transition-colors animate-fade-in">
+                                                <td className="px-4 py-2.5 font-mono text-brand-600 font-bold text-xs">{s.position}</td>
+                                                <td className="px-4 py-2.5 font-medium text-gray-700 text-sm">{s.residue}</td>
+                                                <td className="px-4 py-2.5 text-gray-500 text-xs">{s.type}</td>
+                                                <td className="px-4 py-2.5">{s.references.length > 0 ? <a href={s.references[0].url} target="_blank" rel="noopener" className="text-[10px] font-semibold text-brand-500 hover:underline">PMID:{s.references[0].pubmed_id}</a> : <span className="text-gray-300">&mdash;</span>}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                            {canCollapse && !expanded && (
+                                <button onClick={() => setExpanded(true)} className="mt-3 w-full py-2 text-center text-[11px] font-semibold text-gray-400 hover:text-brand-600 bg-surface-50 rounded-xl border border-dashed border-gray-200 hover:border-brand-300 transition-all">
+                                    +{sites.length - PREVIEW} more modifications
+                                </button>
+                            )}
+                        </div>
+                    ) : <p className="text-xs text-gray-400 italic text-center py-6">No modification sites parsed.</p>}
+                </Card>
+            );
+        };
+
+        // ═══════════════════════════════════════════════════════════════
+        //  SIGNOR GRAPH (INTERACTIVE)
+        // ═══════════════════════════════════════════════════════════════
+
+        const classifyEffect = (effect) => {
+            const e = (effect || '').toLowerCase();
+            if (e.includes('up-regulates') || e.includes('activat')) return 'activates';
+            if (e.includes('down-regulates') || e.includes('inhibit')) return 'inhibits';
+            if (e.includes('form complex')) return 'complex';
+            return 'other';
+        };
+
+        const EFFECT_META = {
+            activates: { label: 'Activates', color: '#22c55e', dot: 'bg-emerald-500' },
+            inhibits:  { label: 'Inhibits',  color: '#ef4444', dot: 'bg-red-500' },
+            complex:   { label: 'Complex',   color: '#8b5cf6', dot: 'bg-violet-500' },
+            other:     { label: 'Other',     color: '#94a3b8', dot: 'bg-gray-400' },
+        };
+
+        const SignorGraph = ({ interactions, entityName, onSelectNode, onSelectEdge, graphHeight }) => {
+            const cyRef = useRef(null);
+            const containerRef = useRef(null);
+            const tooltipRef = useRef(null);
+            const hideTimerRef = useRef(null);
+
+            const getEdgeColor = useCallback((effect) => EFFECT_META[classifyEffect(effect)].color, []);
+
+            useEffect(() => {
+                if (!containerRef.current || !window.cytoscape || interactions.length === 0) return;
+
+                const nodeMap = new Map();
+                const edgeList = [];
+                const degreeCount = {};
+
+                interactions.forEach((ix, i) => {
+                    if (!nodeMap.has(ix.id_a)) nodeMap.set(ix.id_a, { label: ix.entity_a, type: ix.type_a });
+                    if (!nodeMap.has(ix.id_b)) nodeMap.set(ix.id_b, { label: ix.entity_b, type: ix.type_b });
+                    degreeCount[ix.id_a] = (degreeCount[ix.id_a] || 0) + 1;
+                    degreeCount[ix.id_b] = (degreeCount[ix.id_b] || 0) + 1;
+                    edgeList.push({ data: {
+                        id: `e${i}`, source: ix.id_a, target: ix.id_b,
+                        effect: ix.effect, mechanism: ix.mechanism || '',
+                        score: ix.score, label: ix.score >= 0.01 ? ix.score.toFixed(2) : '',
+                        fullLabel: `${ix.mechanism || ix.effect}${ix.score >= 0.01 ? ' (' + ix.score.toFixed(2) + ')' : ''}`,
+                        pmidCount: ix.pmids.length, idx: i,
+                    }});
+                });
+
+                const maxDeg = Math.max(...Object.values(degreeCount), 1);
+                const cyNodes = Array.from(nodeMap.entries()).map(([id, d]) => {
+                    const deg = degreeCount[id] || 1;
+                    const baseSize = d.label === entityName ? 90 : 56;
+                    const size = baseSize + (deg / maxDeg) * 28;
+                    return { data: { id, label: d.label, nodeType: d.type, isCenter: d.label === entityName, degree: deg, size } };
+                });
+
+                if (cyRef.current) cyRef.current.destroy();
+
+                cyRef.current = window.cytoscape({
+                    container: containerRef.current,
+                    elements: [...cyNodes, ...edgeList],
+                    pixelRatio: 'auto',
+                    textureOnViewport: false,
+                    hideEdgesOnViewport: false,
+                    hideLabelsOnViewport: false,
+                    style: [
+                        { selector: 'node', style: {
+                            'label': 'data(label)', 'text-valign': 'center', 'text-halign': 'center',
+                            'font-size': '10px', 'font-weight': '600', 'font-family': 'Inter, sans-serif',
+                            'color': '#334155', 'text-outline-width': 2.5, 'text-outline-color': '#ffffff', 'text-outline-opacity': 0.95,
+                            'background-color': '#dbeafe', 'background-opacity': 0.92,
+                            'border-width': 1.5, 'border-color': '#93c5fd', 'border-opacity': 0.7,
+                            'width': 'data(size)', 'height': 'data(size)', 'text-wrap': 'wrap', 'text-max-width': '75px',
+                            'overlay-padding': '8px', 'overlay-opacity': 0, 'overlay-color': '#0ea5e9',
+                            'underlay-padding': '10px', 'underlay-opacity': 0, 'underlay-color': '#bae6fd',
+                            'transition-property': 'background-color, background-opacity, border-color, border-width, border-opacity, width, height, opacity, overlay-opacity, underlay-opacity, underlay-padding',
+                            'transition-duration': '0.45s',
+                        }},
+                        { selector: 'node[?isCenter]', style: {
+                            'background-color': '#0ea5e9', 'background-opacity': 1,
+                            'color': '#ffffff', 'text-outline-color': '#0369a1', 'text-outline-width': 2.5,
+                            'border-color': '#0284c7', 'border-width': 2.5, 'border-opacity': 0.9,
+                            'font-size': '12px', 'font-weight': '700',
+                            'underlay-color': '#38bdf8', 'underlay-opacity': 0.12, 'underlay-padding': '14px',
+                        }},
+                        { selector: 'node[nodeType = "complex"]', style: {
+                            'shape': 'round-diamond', 'background-color': '#ede9fe', 'border-color': '#a78bfa',
+                        }},
+                        { selector: 'edge', style: {
+                            'curve-style': 'bezier', 'target-arrow-shape': 'triangle', 'arrow-scale': 1.2,
+                            'width': 'mapData(score, 0, 1, 1.2, 4.5)', 'line-opacity': 0.55,
+                            'label': 'data(label)', 'font-size': '8px', 'font-weight': '600', 'font-family': 'JetBrains Mono, monospace',
+                            'color': '#64748b', 'text-opacity': 0.75, 'text-rotation': 'autorotate', 'text-margin-y': -10,
+                            'text-background-color': '#ffffff', 'text-background-opacity': 0.88,
+                            'text-background-padding': '3px', 'text-background-shape': 'roundrectangle',
+                            'transition-property': 'line-color, target-arrow-color, width, opacity, line-opacity, text-opacity',
+                            'transition-duration': '0.45s',
+                        }},
+                        { selector: 'edge:selected', style: {
+                            'label': 'data(fullLabel)', 'font-size': '10px', 'line-opacity': 1, 'text-opacity': 1,
+                            'width': 'mapData(score, 0, 1, 3, 7)', 'z-index': 10,
+                        }},
+                        { selector: '.dimmed', style: { 'opacity': 0.07 }},
+                        { selector: '.highlighted', style: { 'opacity': 1, 'z-index': 10 }},
+                        { selector: 'node.highlighted', style: {
+                            'underlay-opacity': 0.22, 'underlay-padding': '12px', 'border-opacity': 1, 'border-width': 2.5,
+                        }},
+                        { selector: 'edge.highlighted', style: { 'line-opacity': 1, 'text-opacity': 1 }},
+                    ],
+                    layout: {
+                        name: 'cose', animate: true, animationDuration: 1200, animationEasing: 'ease-out-cubic',
+                        nodeRepulsion: (node) => node.data('isCenter') ? 16000 : 8000,
+                        idealEdgeLength: () => 160, gravity: 0.18, padding: 60, randomize: false,
+                        nodeOverlap: 28, nestingFactor: 1.2, numIter: 2500,
+                        initialTemp: 250, coolingFactor: 0.96, minTemp: 1.5,
+                    },
+                    minZoom: 0.3, maxZoom: 4, wheelSensitivity: 0.18,
+                    userZoomingEnabled: true, userPanningEnabled: true, boxSelectionEnabled: false,
+                });
+
+                const cy = cyRef.current;
+                cy.edges().forEach(edge => { const c = getEdgeColor(edge.data('effect')); edge.style({ 'line-color': c, 'target-arrow-color': c }); });
+
+                const tipEl = tooltipRef.current;
+                const showTip = (html, x, y) => {
+                    if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = null; }
+                    tipEl.innerHTML = html;
+                    tipEl.style.left = (x - tipEl.offsetWidth / 2) + 'px';
+                    tipEl.style.top = (y - tipEl.offsetHeight - 14) + 'px';
+                    tipEl.classList.add('visible');
+                };
+                const hideTip = () => {
+                    hideTimerRef.current = setTimeout(() => { tipEl.classList.remove('visible'); hideTimerRef.current = null; }, 80);
+                };
+
+                cy.on('mouseover', 'node', (evt) => {
+                    const n = evt.target; const d = n.data();
+                    if (!n.hasClass('dimmed')) n.style({ 'underlay-opacity': 0.22, 'underlay-padding': '16px' });
+                    const pos = n.renderedPosition();
+                    showTip(`<strong>${d.label}</strong><br/><span style="color:#94a3b8">${d.nodeType || 'protein'}</span> &middot; ${d.degree} connection${d.degree > 1 ? 's' : ''}`, pos.x, pos.y - n.renderedHeight() / 2);
+                });
+                cy.on('mouseout', 'node', (evt) => {
+                    const n = evt.target;
+                    if (!n.hasClass('highlighted') && !n.data('isCenter')) n.style({ 'underlay-opacity': 0, 'underlay-padding': '10px' });
+                    else if (n.data('isCenter') && !n.hasClass('highlighted')) n.style({ 'underlay-opacity': 0.12, 'underlay-padding': '14px' });
+                    hideTip();
+                });
+                cy.on('mouseover', 'edge', (evt) => {
+                    const e = evt.target; const d = e.data();
+                    if (!e.hasClass('dimmed')) e.style({ 'line-opacity': 0.95, 'text-opacity': 1 });
+                    const ec = getEdgeColor(d.effect); const mp = e.renderedMidpoint();
+                    showTip(`<strong style="color:${ec}">${d.effect || 'unknown'}</strong><br/>${d.mechanism ? 'Mechanism: ' + d.mechanism + '<br/>' : ''}Score: <strong>${d.score.toFixed(3)}</strong><br/><span style="color:#94a3b8">${d.pmidCount} pub${d.pmidCount > 1 ? 's' : ''}</span>`, mp.x, mp.y);
+                });
+                cy.on('mouseout', 'edge', (evt) => {
+                    const e = evt.target;
+                    if (!e.hasClass('highlighted')) e.style({ 'line-opacity': 0.55, 'text-opacity': 0.75 });
+                    hideTip();
+                });
+
+                cy.on('tap', 'node', (evt) => {
+                    const node = evt.target;
+                    cy.elements().addClass('dimmed');
+                    node.removeClass('dimmed').addClass('highlighted');
+                    node.connectedEdges().removeClass('dimmed').addClass('highlighted');
+                    node.connectedEdges().connectedNodes().removeClass('dimmed').addClass('highlighted');
+                    if (onSelectNode) onSelectNode(node.data());
+                });
+                cy.on('tap', 'edge', (evt) => {
+                    const edge = evt.target;
+                    cy.elements().addClass('dimmed');
+                    edge.removeClass('dimmed').addClass('highlighted');
+                    edge.source().removeClass('dimmed').addClass('highlighted');
+                    edge.target().removeClass('dimmed').addClass('highlighted');
+                    if (onSelectEdge) onSelectEdge(interactions[edge.data('idx')]);
+                });
+                cy.on('tap', (evt) => {
+                    if (evt.target === cy) { cy.elements().removeClass('dimmed highlighted'); if (onSelectNode) onSelectNode(null); if (onSelectEdge) onSelectEdge(null); }
+                });
+
+                cy.one('layoutstop', () => {
+                    const center = cy.nodes('[?isCenter]');
+                    if (center.length) {
+                        center.animate({ style: { 'underlay-opacity': 0.32, 'underlay-padding': '22px' } },
+                            { duration: 700, easing: 'ease-in-out-sine', complete: () => {
+                                center.animate({ style: { 'underlay-opacity': 0.12, 'underlay-padding': '14px' } },
+                                    { duration: 900, easing: 'ease-out-sine' });
+                            }});
+                    }
+                });
+
+                return () => { if (hideTimerRef.current) clearTimeout(hideTimerRef.current); if (cyRef.current) cyRef.current.destroy(); };
+            }, [interactions, entityName, getEdgeColor, onSelectNode, onSelectEdge]);
+
+            const handleFit = () => {
+                if (cyRef.current) cyRef.current.animate({ fit: { eles: cyRef.current.elements(), padding: 50 } }, { duration: 500, easing: 'ease-out-cubic' });
+            };
+            const handleReset = () => {
+                if (cyRef.current) {
+                    cyRef.current.elements().removeClass('dimmed highlighted');
+                    cyRef.current.animate({ fit: { eles: cyRef.current.elements(), padding: 50 } }, { duration: 500, easing: 'ease-out-cubic' });
+                    if (onSelectNode) onSelectNode(null); if (onSelectEdge) onSelectEdge(null);
+                }
+            };
+
+            if (interactions.length === 0) return (
+                <div className="rounded-2xl border border-dashed border-gray-200 bg-surface-50 flex items-center justify-center text-sm text-gray-400 italic" style={{ height: graphHeight || 480 }}>No interactions match current filters.</div>
+            );
+
+            return (
+                <div className="relative rounded-2xl overflow-hidden border border-gray-200/70 shadow-lg bg-white" style={{ height: graphHeight || 480 }}>
+                    <div ref={containerRef} className="graph-canvas" style={{ width: '100%', height: '100%' }} />
+                    <div ref={tooltipRef} className="cy-tooltip" />
+                    <div className="absolute top-3 right-3 flex gap-1.5">
+                        <button onClick={handleFit} className="p-2 bg-white/90 backdrop-blur border border-gray-200/80 rounded-xl hover:bg-white hover:shadow-md transition-all duration-200 shadow-sm" title="Fit to screen"><Icon name="maximize-2" className="w-3.5 h-3.5 text-gray-500" /></button>
+                        <button onClick={handleReset} className="p-2 bg-white/90 backdrop-blur border border-gray-200/80 rounded-xl hover:bg-white hover:shadow-md transition-all duration-200 shadow-sm" title="Reset view"><Icon name="refresh-cw" className="w-3.5 h-3.5 text-gray-500" /></button>
+                    </div>
+                    <div className="absolute bottom-3 left-3 text-[9px] text-gray-400/70 font-medium bg-white/70 backdrop-blur px-2.5 py-1 rounded-lg">Edge width &amp; label = confidence &middot; Click to inspect &middot; Scroll to zoom</div>
+                </div>
+            );
+        };
+
+        // ═══════════════════════════════════════════════════════════════
+        //  SIGNOR SECTION
+        // ═══════════════════════════════════════════════════════════════
+
+        const GraphControlBar = ({ filters, setFilters, scoreCutoff, setScoreCutoff, totalCount, visibleCount, onFullscreen }) => {
+            const toggle = (key) => setFilters(prev => ({ ...prev, [key]: !prev[key] }));
+            return (
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-4 p-3 bg-surface-50 rounded-xl border border-gray-100">
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mr-1">Filter</span>
+                    {Object.entries(EFFECT_META).map(([key, m]) => (
+                        <button key={key} onClick={() => toggle(key)}
+                            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-all ${filters[key] ? 'bg-white border-gray-300 text-gray-800 shadow-sm' : 'bg-transparent border-transparent text-gray-400 line-through opacity-60'}`}>
+                            <div className={`w-2 h-2 rounded-full ${m.dot}`} /> {m.label}
+                        </button>
+                    ))}
+                    <div className="flex items-center gap-2 ml-auto border-l border-gray-200 pl-4">
+                        <label className="text-[10px] font-bold text-gray-400 uppercase whitespace-nowrap">Score &ge;</label>
+                        <input type="range" min="0" max="1" step="0.05" value={scoreCutoff} onChange={(e) => setScoreCutoff(parseFloat(e.target.value))}
+                            className="w-24 h-1.5 accent-brand-500 cursor-pointer" />
+                        <span className="font-mono text-[11px] font-semibold text-gray-700 w-8 text-right">{scoreCutoff.toFixed(2)}</span>
+                    </div>
+                    <span className="text-[10px] text-gray-400 font-medium border-l border-gray-200 pl-3">{visibleCount}/{totalCount}</span>
+                    <button onClick={onFullscreen} className="p-1.5 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors shadow-sm ml-1" title="Fullscreen">
+                        <Icon name="maximize" className="w-3.5 h-3.5 text-gray-500" />
+                    </button>
+                </div>
+            );
+        };
+
+        const SignorSection = ({ symbol, accession }) => {
+            const [data, setData] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            const [tab, setTab] = useState('graph');
+            const [expandedRow, setExpandedRow] = useState(null);
+            const [selectedEdge, setSelectedEdge] = useState(null);
+            const [selectedNode, setSelectedNode] = useState(null);
+            const [fullscreen, setFullscreen] = useState(false);
+            const [filters, setFilters] = useState({ activates: true, inhibits: true, complex: true, other: true });
+            const [scoreCutoff, setScoreCutoff] = useState(0);
+
+            useEffect(() => {
+                (async () => {
+                    setLoading(true); setError(null);
+                    try {
+                        const r = await fetch(`/api/v1/gene/${symbol}/signor`);
+                        if (!r.ok) throw new Error((await r.json()).error || "Failed");
+                        setData(await r.json());
+                    } catch (err) { setError(err.message); }
+                    finally { setLoading(false); }
+                })();
+            }, [symbol]);
+
+            useEffect(() => {
+                if (!fullscreen) return;
+                const onKey = (e) => { if (e.key === 'Escape') setFullscreen(false); };
+                document.addEventListener('keydown', onKey);
+                document.body.style.overflow = 'hidden';
+                return () => { document.removeEventListener('keydown', onKey); document.body.style.overflow = ''; };
+            }, [fullscreen]);
+
+            const filteredInteractions = useMemo(() => {
+                if (!data) return [];
+                return data.interactions.filter(ix => {
+                    const cat = classifyEffect(ix.effect);
+                    if (!filters[cat]) return false;
+                    if (ix.score < scoreCutoff) return false;
+                    return true;
+                });
+            }, [data, filters, scoreCutoff]);
+
+            const effectBadge = (effect) => {
+                const e = (effect || '').toLowerCase();
+                if (e.includes('down-regulates')) return <Badge variant="red">Inhibits</Badge>;
+                if (e.includes('up-regulates')) return <Badge variant="success">Activates</Badge>;
+                if (e.includes('form complex')) return <Badge variant="purple">Complex</Badge>;
+                return <Badge>{effect || 'Unknown'}</Badge>;
+            };
+
+            const scorePill = (score) => {
+                const color = score >= 0.7 ? 'text-emerald-600 bg-emerald-50 ring-emerald-200' : score >= 0.4 ? 'text-amber-600 bg-amber-50 ring-amber-200' : 'text-gray-500 bg-gray-50 ring-gray-200';
+                return <span className={`font-mono text-[11px] font-semibold px-2 py-0.5 rounded-md ring-1 ring-inset ${color}`}>{score.toFixed(3)}</span>;
+            };
+
+            const detailPanel = (
+                (selectedEdge || selectedNode) ? (
+                    <div className="mt-4 p-4 bg-surface-50 border border-gray-200 rounded-xl animate-fade-in">
+                        {selectedEdge && (
+                            <div>
+                                <div className="flex flex-wrap items-center gap-2 mb-2">
+                                    <span className="font-semibold text-sm text-gray-900">{selectedEdge.entity_a}</span>
+                                    <span className="text-gray-300">&rarr;</span>
+                                    {effectBadge(selectedEdge.effect)}
+                                    <span className="text-gray-300">&rarr;</span>
+                                    <span className="font-semibold text-sm text-gray-900">{selectedEdge.entity_b}</span>
+                                    <span className="ml-auto">{scorePill(selectedEdge.score)}</span>
+                                </div>
+                                {selectedEdge.mechanism && <p className="text-xs text-gray-500 mb-2">Mechanism: <span className="font-medium text-gray-700">{selectedEdge.mechanism}</span></p>}
+                                <div className="flex gap-2 flex-wrap">
+                                    {selectedEdge.pmids.map((p, i) => <a key={i} href={`https://pubmed.ncbi.nlm.nih.gov/${p}`} target="_blank" rel="noopener" className="text-[10px] font-semibold text-brand-600 bg-brand-50 px-2 py-0.5 rounded hover:underline">PMID:{p}</a>)}
+                                </div>
+                                {selectedEdge.sentences.length > 0 && (
+                                    <div className="mt-3 pt-3 border-t border-gray-200">
+                                        <p className="text-[10px] font-bold text-gray-400 uppercase mb-1.5">Evidence</p>
+                                        {selectedEdge.sentences.map((s, i) => <p key={i} className="text-xs text-gray-600 leading-relaxed mb-1.5 last:mb-0">{s}</p>)}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        {selectedNode && !selectedEdge && (
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-full bg-brand-100 flex items-center justify-center font-bold text-brand-700 text-sm">{selectedNode.label?.charAt(0)}</div>
+                                <div>
+                                    <p className="font-semibold text-gray-900">{selectedNode.label}</p>
+                                    <p className="text-xs text-gray-500">{selectedNode.nodeType || 'protein'} &middot; {selectedNode.degree} connection{selectedNode.degree > 1 ? 's' : ''}</p>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                ) : null
+            );
+
+            if (loading) return (
+                <Card id="signor" title="SIGNOR Signaling Network">
+                    <div className="py-14 text-center">
+                        <div className="inline-block w-8 h-8 border-[3px] border-gray-200 border-t-brand-500 rounded-full animate-spin mb-4" />
+                        <p className="text-sm text-gray-400">Loading SIGNOR interaction data...</p>
+                    </div>
+                </Card>
+            );
+
+            if (error) return (
+                <Card id="signor" title="SIGNOR Signaling Network">
+                    <div className="py-10 text-center">
+                        <Icon name="alert-circle" className="w-8 h-8 text-red-300 mx-auto mb-3" />
+                        <p className="text-sm text-gray-500 mb-2">{error}</p>
+                        <a href={`https://signor.uniroma2.it/relation_result.php?id=${accession}`} target="_blank" rel="noopener" className="text-xs text-brand-600 font-semibold hover:underline inline-flex items-center gap-1">View on SIGNOR <Icon name="external-link" className="w-3 h-3" /></a>
+                    </div>
+                </Card>
+            );
+
+            const hasData = data && data.interactions && data.interactions.length > 0;
+            if (!hasData) return (
+                <Card id="signor" title="SIGNOR Signaling Network">
+                    <p className="text-sm text-gray-400 italic text-center py-8">No SIGNOR signaling data found for this protein.</p>
+                </Card>
+            );
+
+            const tabs = [
+                { id: 'graph', label: 'Network Graph', icon: 'share-2' },
+                { id: 'table', label: 'Interactions', icon: 'table', count: data.interactions.length },
+                ...(data.modifications.length > 0 ? [{ id: 'mods', label: 'Modifications', icon: 'zap', count: data.modifications.length }] : []),
+            ];
+
+            return (
+                <React.Fragment>
+                <Card id="signor" title="SIGNOR Signaling Network" subtitle={`${data.entity_name} \u2022 ${data.total_relations} relations \u2022 ${data.interactions.length} unique interactions`}
+                    headerRight={
+                        <a href={`https://signor.uniroma2.it/relation_result.php?id=${accession}`} target="_blank" rel="noopener" className="text-[11px] text-brand-600 font-semibold hover:underline flex items-center gap-1">
+                            SIGNOR DB <Icon name="external-link" className="w-3 h-3" />
+                        </a>
+                    }>
+
+                    <div className="flex gap-1 mb-5 bg-surface-50 rounded-xl p-1 border border-gray-100">
+                        {tabs.map(t => (
+                            <button key={t.id} onClick={() => setTab(t.id)}
+                                className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${tab === t.id ? 'bg-white text-gray-900 shadow-sm border border-gray-200' : 'text-gray-500 hover:text-gray-700'}`}>
+                                <Icon name={t.icon} className="w-3.5 h-3.5" />
+                                {t.label}
+                                {t.count != null && <span className="ml-0.5 text-[10px] font-bold text-gray-400">{t.count}</span>}
+                            </button>
+                        ))}
+                    </div>
+
+                    {tab === 'graph' && (
+                        <div className="animate-fade-in">
+                            <GraphControlBar filters={filters} setFilters={setFilters} scoreCutoff={scoreCutoff} setScoreCutoff={setScoreCutoff} totalCount={data.interactions.length} visibleCount={filteredInteractions.length} onFullscreen={() => setFullscreen(true)} />
+                            <SignorGraph interactions={filteredInteractions} entityName={data.entity_name} onSelectNode={setSelectedNode} onSelectEdge={setSelectedEdge} />
+                            {detailPanel}
+                        </div>
+                    )}
+
+                    {tab === 'table' && (
+                        <div className="animate-fade-in overflow-x-auto rounded-xl border border-gray-100">
+                            <table className="w-full text-left text-sm">
+                                <thead className="bg-surface-50 text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100">
+                                    <tr>
+                                        <th className="px-4 py-3">Regulator</th>
+                                        <th className="px-4 py-3">Effect</th>
+                                        <th className="px-4 py-3">Mechanism</th>
+                                        <th className="px-4 py-3">Target</th>
+                                        <th className="px-4 py-3 text-right">Score</th>
+                                        <th className="px-4 py-3 text-right">Evidence</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-50">
+                                    {data.interactions.map((ix, i) => (
+                                        <React.Fragment key={i}>
+                                            <tr className={`cursor-pointer transition-colors ${expandedRow === i ? 'bg-brand-50/40' : 'hover:bg-surface-50'}`} onClick={() => setExpandedRow(expandedRow === i ? null : i)}>
+                                                <td className="px-4 py-3 font-semibold text-gray-800 text-[13px]">{ix.entity_a}</td>
+                                                <td className="px-4 py-3">{effectBadge(ix.effect)}</td>
+                                                <td className="px-4 py-3 text-gray-500 text-xs">{ix.mechanism || '\u2014'}</td>
+                                                <td className="px-4 py-3 font-semibold text-gray-800 text-[13px]">{ix.entity_b}</td>
+                                                <td className="px-4 py-3 text-right">{scorePill(ix.score)}</td>
+                                                <td className="px-4 py-3 text-right">
+                                                    <div className="flex items-center justify-end gap-2">
+                                                        <span className="text-[10px] text-gray-400 font-medium">{ix.pmids.length} pub{ix.pmids.length > 1 ? 's' : ''}</span>
+                                                        <Icon name={expandedRow === i ? "chevron-up" : "chevron-down"} className="w-3 h-3 text-gray-300" />
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                            {expandedRow === i && (
+                                                <tr className="animate-fade-in">
+                                                    <td colSpan={6} className="px-5 py-4 bg-surface-50 border-l-[3px] border-brand-400">
+                                                        <div className="flex flex-wrap gap-2 mb-3">
+                                                            {ix.pmids.map((p, j) => (
+                                                                <a key={j} href={`https://pubmed.ncbi.nlm.nih.gov/${p}`} target="_blank" rel="noopener" className="text-[10px] font-semibold text-brand-600 bg-white px-2.5 py-1 rounded-md border border-brand-200 hover:bg-brand-50 transition-colors" onClick={(e) => e.stopPropagation()}>
+                                                                    PMID:{p} <Icon name="external-link" className="w-2.5 h-2.5 inline" />
+                                                                </a>
+                                                            ))}
+                                                        </div>
+                                                        {ix.sentences.length > 0 && ix.sentences.map((s, j) => <p key={j} className="text-xs text-gray-600 leading-relaxed mb-1.5 last:mb-0">{s}</p>)}
+                                                        {ix.sentences.length === 0 && <p className="text-xs text-gray-400 italic">No sentence evidence available.</p>}
+                                                    </td>
+                                                </tr>
+                                            )}
+                                        </React.Fragment>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+
+                    {tab === 'mods' && (
+                        <div className="animate-fade-in overflow-x-auto rounded-xl border border-gray-100">
+                            <table className="w-full text-left text-sm">
+                                <thead className="bg-surface-50 text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100">
+                                    <tr>
+                                        <th className="px-4 py-3">Modifier</th>
+                                        <th className="px-4 py-3">Residue</th>
+                                        <th className="px-4 py-3">Sequence Context</th>
+                                        <th className="px-4 py-3">Effect</th>
+                                        <th className="px-4 py-3">Mechanism</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-50">
+                                    {data.modifications.map((m, i) => (
+                                        <tr key={i} className="hover:bg-surface-50 transition-colors">
+                                            <td className="px-4 py-3 font-semibold text-gray-800">{m.modifier}</td>
+                                            <td className="px-4 py-3 font-mono text-brand-600 font-bold text-xs">{m.residue}</td>
+                                            <td className="px-4 py-3 font-mono text-[11px] text-gray-400 tracking-tight">{m.sequence}</td>
+                                            <td className="px-4 py-3">{effectBadge(m.effect)}</td>
+                                            <td className="px-4 py-3 text-gray-500 text-xs">{m.mechanism}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </Card>
+
+                {fullscreen && (
+                    <div className="fixed inset-0 z-[9999] bg-black/60 backdrop-blur-sm flex flex-col animate-fade-in" onClick={() => setFullscreen(false)}>
+                        <div className="flex-1 m-4 bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 bg-surface-50 shrink-0">
+                                <div className="flex items-center gap-3">
+                                    <span className="font-semibold text-gray-900 text-sm">{data.entity_name} &mdash; SIGNOR Network</span>
+                                    <Badge variant="info">{filteredInteractions.length} interactions</Badge>
+                                </div>
+                                <button onClick={() => setFullscreen(false)} className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-500 transition-colors" title="Close (Esc)">
+                                    <Icon name="x" className="w-5 h-5" />
+                                </button>
+                            </div>
+                            <div className="px-4 pt-3 shrink-0">
+                                <GraphControlBar filters={filters} setFilters={setFilters} scoreCutoff={scoreCutoff} setScoreCutoff={setScoreCutoff} totalCount={data.interactions.length} visibleCount={filteredInteractions.length} onFullscreen={() => setFullscreen(false)} />
+                            </div>
+                            <div className="flex-1 px-4 pb-4 min-h-0">
+                                <SignorGraph interactions={filteredInteractions} entityName={data.entity_name} onSelectNode={setSelectedNode} onSelectEdge={setSelectedEdge} graphHeight="100%" />
+                            </div>
+                            {detailPanel && <div className="px-4 pb-4 shrink-0 max-h-48 overflow-y-auto">{detailPanel}</div>}
+                        </div>
+                    </div>
+                )}
+                </React.Fragment>
+            );
+        };
+
+        // ═══════════════════════════════════════════════════════════════
+        //  STRUCTURE PANEL
+        // ═══════════════════════════════════════════════════════════════
+
+        const StructurePanel = ({ structure }) => {
+            const [sel, setSel] = useState(structure.pdb_structures[0]?.pdb_id || null);
+            return (
+                <Card id="structure" title="Protein Structure" subtitle={`${structure.pdb_structures.length} experimental structure${structure.pdb_structures.length !== 1 ? 's' : ''}`}>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div>
+                            <div className="max-h-72 overflow-y-auto rounded-xl border border-gray-100 divide-y divide-gray-50 bg-white mb-4">
+                                {structure.pdb_structures.map((pdb, i) => (
+                                    <div key={i} onClick={() => setSel(pdb.pdb_id)} className={`p-3.5 cursor-pointer transition-all flex items-center justify-between hover:bg-surface-50 ${sel === pdb.pdb_id ? 'bg-brand-50 border-l-[3px] border-brand-500' : ''}`}>
+                                        <div>
+                                            <p className="font-bold text-gray-900 text-sm">{pdb.pdb_id}</p>
+                                            <p className="text-[10px] text-gray-400 uppercase tracking-wide">{pdb.method} &middot; {pdb.resolution}</p>
+                                        </div>
+                                        <a href={pdb.link} target="_blank" rel="noopener" className="p-1.5 bg-white rounded-lg border border-gray-200 text-gray-400 hover:text-brand-600 transition-colors" onClick={(e) => e.stopPropagation()}>
+                                            <Icon name="external-link" className="w-3 h-3" />
+                                        </a>
+                                    </div>
+                                ))}
+                                {structure.pdb_structures.length === 0 && <div className="p-6 text-center text-xs text-gray-400 italic">No experimental structures available.</div>}
+                            </div>
+                            <a href={structure.alphafold_link} target="_blank" rel="noopener" className="flex items-center justify-between p-4 bg-brand-50 border border-brand-200 rounded-xl text-sm font-semibold text-brand-700 hover:bg-brand-100 transition-colors group">
+                                <span className="flex items-center gap-2"><Icon name="cpu" className="w-4 h-4" /> AlphaFold Prediction</span>
+                                <Icon name="arrow-up-right" className="w-4 h-4 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                            </a>
+                        </div>
+                        <div className="bg-gray-900 rounded-2xl overflow-hidden min-h-[420px] flex flex-col items-center justify-center relative border border-gray-800">
+                            {sel ? (
+                                <iframe src={`https://molstar.org/viewer/?pdb=${sel}&hide-controls=1`} className="w-full h-full border-0 absolute inset-0 bg-black" title={`PDB ${sel}`} />
+                            ) : (
+                                <div className="text-center p-10">
+                                    <div className="w-16 h-16 bg-gray-800 rounded-2xl flex items-center justify-center mx-auto mb-4"><Icon name="box" className="w-8 h-8 text-gray-600" /></div>
+                                    <p className="text-gray-400 text-sm font-medium">Select a PDB entry</p>
+                                </div>
+                            )}
+                            {sel && <div className="absolute top-3 left-3 px-3 py-1 rounded-lg bg-black/60 backdrop-blur text-white text-[10px] font-bold uppercase tracking-wider">{sel}</div>}
+                        </div>
+                    </div>
+                </Card>
+            );
+        };
+
+        // ═══════════════════════════════════════════════════════════════
+        //  DASHBOARD
+        // ═══════════════════════════════════════════════════════════════
+
+        const Dashboard = () => {
+            const [query, setQuery] = useState("");
+            const genes = ["TP53", "BRCA2", "BRCA1", "EGFR", "MTOR", "RAD51B"];
+            return (
+                <div className="min-h-screen flex items-center justify-center p-6 bg-gradient-to-br from-surface-50 via-white to-brand-50/30">
+                    <div className="w-full max-w-lg text-center">
+                        <div className="mb-10">
+                            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-brand-50 text-brand-700 text-[10px] font-bold uppercase tracking-widest mb-5 ring-1 ring-brand-200">
+                                <Icon name="dna" className="w-3 h-3" /> Gene Explorer v2
+                            </div>
+                            <h1 className="text-4xl sm:text-5xl font-black text-gray-900 tracking-tight leading-tight">Human Gene<br/><span className="text-brand-600">Database</span></h1>
+                            <p className="text-gray-500 mt-4 leading-relaxed text-sm max-w-sm mx-auto">Research-grade biological summaries powered by UniProt Swiss-Prot, with interactive variant mapping and signaling network analysis.</p>
+                        </div>
+                        <div className="relative mb-6">
+                            <input type="text" placeholder="Enter HGNC symbol (e.g. BRCA2)" className="w-full py-4 pl-5 pr-28 rounded-2xl border border-gray-200 focus:border-brand-400 focus:ring-4 focus:ring-brand-100 outline-none text-lg font-medium transition-all bg-white shadow-sm" value={query} onChange={(e) => setQuery(e.target.value.toUpperCase())} onKeyDown={(e) => e.key === 'Enter' && query && (window.location.hash = `#/gene/${query}`)} />
+                            <button onClick={() => query && (window.location.hash = `#/gene/${query}`)} className="absolute right-2 top-2 bottom-2 px-5 bg-brand-600 text-white rounded-xl font-semibold text-sm hover:bg-brand-700 transition-colors shadow-md">Search</button>
+                        </div>
+                        <div className="flex flex-wrap justify-center gap-2">
+                            {genes.map(g => (
+                                <button key={g} onClick={() => window.location.hash = `#/gene/${g}`} className="px-4 py-1.5 bg-white border border-gray-200 rounded-full text-xs font-semibold text-gray-500 hover:border-brand-400 hover:text-brand-600 transition-all hover:shadow-sm">{g}</button>
+                            ))}
+                        </div>
+                        <p className="mt-10 text-[10px] text-gray-300 font-medium">Data from UniProtKB &middot; SIGNOR &middot; PDB &middot; AlphaFold &middot; Reactome</p>
+                    </div>
+                </div>
+            );
+        };
+
+        // ═══════════════════════════════════════════════════════════════
+        //  GENE PAGE
+        // ═══════════════════════════════════════════════════════════════
+
+        const GenePage = ({ symbol }) => {
+            const [data, setData] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            const [activeNav, setActiveNav] = useState("functional");
+            const [toast, showToast] = useToast();
+
+            useEffect(() => {
+                (async () => {
+                    setLoading(true); setError(null);
+                    try {
+                        const r = await fetch(`/api/v1/gene/${symbol}`);
+                        if (!r.ok) throw new Error((await r.json()).error || "Failed");
+                        setData(await r.json());
+                    } catch (err) { setError(err.message); }
+                    finally { setLoading(false); }
+                })();
+            }, [symbol]);
+
+            useEffect(() => {
+                if (!data) return;
+                const ids = navItems.map(n => n.id);
+                const observer = new IntersectionObserver((entries) => {
+                    entries.forEach(e => { if (e.isIntersecting) setActiveNav(e.target.id); });
+                }, { rootMargin: '-20% 0px -60% 0px', threshold: 0.1 });
+                ids.forEach(id => { const el = document.getElementById(id); if (el) observer.observe(el); });
+                return () => observer.disconnect();
+            }, [data]);
+
+            const navItems = [
+                { id: "functional", label: "Functional", icon: "activity" },
+                { id: "sequence", label: "Sequence", icon: "code" },
+                { id: "expression", label: "Expression", icon: "bar-chart-2" },
+                { id: "ptm", label: "PTM", icon: "zap" },
+                { id: "variants", label: "Variants", icon: "git-commit" },
+                { id: "pathways", label: "Pathways", icon: "git-branch" },
+                { id: "signor", label: "SIGNOR", icon: "share-2" },
+                { id: "structure", label: "Structure", icon: "box" },
+            ];
+
+            if (loading) return (
+                <div className="max-w-3xl mx-auto p-10 mt-20">
+                    <SkeletonBlock rows={2} />
+                    <div className="mt-8"><SkeletonBlock rows={5} /></div>
+                    <div className="mt-8"><SkeletonBlock rows={4} /></div>
+                </div>
+            );
+            if (error) return (
+                <div className="min-h-screen flex flex-col items-center justify-center gap-3">
+                    <Icon name="alert-triangle" className="w-10 h-10 text-red-300" />
+                    <p className="font-semibold text-gray-700">{error}</p>
+                    <button onClick={() => window.location.hash = '#/'} className="text-sm text-brand-600 font-medium hover:underline">Back to search</button>
+                </div>
+            );
+
+            return (
+                <div className="pb-32">
+                    <Toast message={toast} />
+
+                    <nav className="sticky top-0 z-50 bg-white/95 backdrop-blur-md border-b border-gray-200 h-14 flex items-center px-6 shadow-sm">
+                        <div className="max-w-7xl mx-auto w-full flex justify-between items-center">
+                            <button onClick={() => window.location.hash = '#/'} className="flex items-center gap-2 text-sm font-semibold text-gray-600 hover:text-brand-700 transition-colors group">
+                                <Icon name="arrow-left" className="w-4 h-4 group-hover:-translate-x-0.5 transition-transform" />
+                                Explorer
+                            </button>
+                            <div className="hidden sm:flex items-center gap-2">
+                                <span className="text-xs font-bold text-gray-900 tracking-wide">{data.gene_symbol}</span>
+                                <span className="text-[10px] text-gray-400 font-medium">{data.identification.primary_gene}</span>
+                            </div>
+                            <a href={`https://www.uniprot.org/uniprotkb/${data.uniprot_accession}`} target="_blank" rel="noopener" className="text-[10px] text-gray-400 font-semibold hover:text-brand-600 transition-colors">{data.uniprot_accession}</a>
+                        </div>
+                    </nav>
+
+                    <GeneHeader data={data} />
+
+                    <div className="max-w-7xl mx-auto px-6 mt-8 lg:flex gap-10">
+                        <aside className="hidden lg:block w-56 sticky-nav space-y-1">
+                            {navItems.map(item => (
+                                <button key={item.id} onClick={() => { setActiveNav(item.id); document.getElementById(item.id)?.scrollIntoView({ behavior: 'smooth' }); }}
+                                    className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-[13px] font-medium transition-all ${activeNav === item.id ? 'bg-brand-600 text-white shadow-md shadow-brand-200' : 'text-gray-500 hover:bg-surface-100 hover:text-gray-700'}`}>
+                                    <Icon name={item.icon} className="w-4 h-4" /> {item.label}
+                                </button>
+                            ))}
+                            <div className="mt-6 pt-4 border-t border-gray-100">
+                                <p className="text-[9px] text-gray-300 font-medium uppercase tracking-widest px-3">Data Sources</p>
+                                <div className="mt-2 px-3 space-y-1 text-[10px] text-gray-400">
+                                    <p>UniProt Swiss-Prot</p><p>SIGNOR 4.0</p><p>PDB / AlphaFold</p><p>Reactome</p>
+                                </div>
+                            </div>
+                        </aside>
+
+                        <div className="flex-1 space-y-10 min-w-0">
+                            <Card id="functional" title="Functional Context" subtitle="Biological role and subcellular localization">
+                                <SubSection title="General Function">
+                                    {data.function.general_function || 'No functional annotation available.'}
+                                </SubSection>
+                                {data.function.subsections.map((sub, i) => (
+                                    <SubSection key={i} title={sub.title}>{sub.content}</SubSection>
+                                ))}
+                                <ReferenceBlock references={data.function.references} />
+                            </Card>
+
+                            <Card id="sequence" title="Amino Acid Sequence" subtitle={`${data.sequence.length} residues`}
+                                headerRight={
+                                    <button onClick={() => { navigator.clipboard.writeText(data.sequence.sequence); showToast('Sequence copied to clipboard'); }} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-500 hover:text-brand-600 bg-surface-50 border border-gray-200 rounded-lg hover:border-brand-300 transition-all">
+                                        <Icon name="copy" className="w-3.5 h-3.5" /> Copy
+                                    </button>
+                                }>
+                                <div className="bg-gray-900 rounded-xl p-5">
+                                    <pre className="mono text-[10px] sm:text-xs text-emerald-400 leading-relaxed break-all whitespace-pre-wrap max-h-44 overflow-y-auto">{data.sequence.sequence}</pre>
+                                </div>
+                            </Card>
+
+                            <Card id="expression" title="Expression Pattern" subtitle="Tissue specificity and developmental stage">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <SubSection title="Tissue Specificity">{data.expression.tissue_specificity || 'N/A'}</SubSection>
+                                        <SubSection title="Developmental Stage">{data.expression.developmental_stage || 'N/A'}</SubSection>
+                                    </div>
+                                    <div className="bg-surface-50 p-5 rounded-xl border border-gray-100">
+                                        <h5 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">External Links</h5>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                            {data.expression.external_links.map((link, i) => (
+                                                <a key={i} href={link.url} target="_blank" rel="noopener" className="flex items-center justify-between px-3 py-2 bg-white border border-gray-100 rounded-lg text-[11px] font-semibold text-brand-600 hover:border-brand-300 transition-all group">
+                                                    {link.database} <Icon name="arrow-up-right" className="w-3 h-3 opacity-50 group-hover:opacity-100 transition-opacity" />
+                                                </a>
+                                            ))}
+                                            {data.expression.external_links.length === 0 && <p className="text-xs text-gray-400 italic col-span-2 text-center py-2">None available.</p>}
+                                        </div>
+                                    </div>
+                                </div>
+                            </Card>
+
+                            <PtmSection ptm={data.ptm} />
+
+                            <VariantViewer variants={data.variants} sequenceLength={data.sequence.length} />
+                            <PathwaySection reactome={data.reactome || []} />
+                            <SignorSection symbol={data.gene_symbol} accession={data.uniprot_accession} />
+                            <StructurePanel structure={data.structure} />
+                        </div>
+                    </div>
+
+                    <footer className="mt-24 py-12 bg-gray-900">
+                        <div className="max-w-3xl mx-auto px-6 text-center">
+                            <p className="text-sm font-semibold text-white mb-1">Gene Explorer</p>
+                            <p className="text-xs text-gray-500 leading-relaxed">Research-grade biological data integrated from UniProt Swiss-Prot, SIGNOR, Reactome, PDB, and AlphaFold for <em>Homo sapiens</em> entries.</p>
+                            <button onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} className="mt-4 text-[10px] text-gray-600 font-semibold uppercase tracking-widest hover:text-white transition-colors">Back to top</button>
+                        </div>
+                    </footer>
+                </div>
+            );
+        };
+
+        // ═══════════════════════════════════════════════════════════════
+        //  APP ROUTER
+        // ═══════════════════════════════════════════════════════════════
+
+        const App = () => {
+            const [route, setRoute] = useState({ path: 'dashboard', symbol: '' });
+            useEffect(() => {
+                const parse = () => {
+                    const hash = window.location.hash || '#/';
+                    if (hash.startsWith('#/gene/')) setRoute({ path: 'gene', symbol: hash.replace('#/gene/', '').split('?')[0] });
+                    else setRoute({ path: 'dashboard', symbol: '' });
+                };
+                window.addEventListener('hashchange', parse);
+                parse();
+                return () => window.removeEventListener('hashchange', parse);
+            }, []);
+            return route.path === 'gene' ? <GenePage symbol={route.symbol} /> : <Dashboard />;
+        };
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+
+</html>
